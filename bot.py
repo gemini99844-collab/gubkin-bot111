@@ -1,388 +1,411 @@
 import asyncio
-import os
-from datetime import datetime, timedelta, date, timezone
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart, Command
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+)
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
-# Токен бота (читает из переменных Render или подставляет твой запасной)
-TOKEN = os.environ.get("BOT_TOKEN", "ТОКЕН_ТВОЕГО_БОТА")
+# Токен бота (берется из переменных окружения Render или вставляется напрямую)
+TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН_ЕСЛИ_НУЖНО")
 
-bot = Bot(token=TOKEN)
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-logging.basicConfig(level=logging.INFO)
+# Словарь для хранения выбранной группы пользователя: {user_id: "БС-26-05" или "ББ-25-02"}
+user_groups = {}
 
-# Московский часовой пояс (UTC+3)
+# Линия-разделитель между парами, чтобы текст не сливался
+PAIR_SEPARATOR = "\n─────────────────────────\n"
+
+# Московское время (UTC+3)
 MSK_TZ = timezone(timedelta(hours=3))
 
-def get_moscow_now() -> datetime:
-    return datetime.now(MSK_TZ)
+DAYS_RU = {
+    0: "Понедельник",
+    1: "Вторник",
+    2: "Среда",
+    3: "Четверг",
+    4: "Пятница",
+    5: "Суббота",
+    6: "Воскресенье",
+}
 
-class UserState(StatesGroup):
-    waiting_for_group = State()
-    main_menu = State()
+# =====================================================================
+# 1. РАСПИСАНИЕ ГРУППЫ БС-26-05
+# =====================================================================
+SCHEDULE_BS_26_05 = {
+    "upper": {
+        0: [
+            "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Семинар)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1603",
+            "🕒 12:00 – 13:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1603",
+            "🕒 14:00 – 15:30 | 🛢️ <b>Углеводородная парадигма современности</b> (Лекция)\n👨‍🏫 Алексанян К.Г. | 🚪 Ауд. 725",
+        ],
+        1: [
+            "🕒 10:15 – 11:45 | 📐 <b>Математический анализ</b> (Лекция)",
+            "🕒 12:00 – 13:30 | 📐 <b>Математический анализ</b> (Семинар)",
+        ],
+        2: [
+            "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Лекция)",
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык</b> (Семинар)",
+        ],
+        3: [
+            "🕒 10:15 – 11:45 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Лекция)",
+            "🕒 12:00 – 13:30 | 💻 <b>Информатика и цифровые технологии</b> (Семинар)",
+        ],
+        4: [
+            "🕒 10:15 – 11:45 | 🏃 <b>Физическая культура и спорт</b> (Семинар)",
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык</b> (Семинар)",
+        ],
+        5: [],
+        6: [],
+    },
+    "lower": {
+        0: [
+            "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Семинар)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1603",
+            "🕒 12:00 – 13:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1603",
+        ],
+        1: [
+            "🕒 10:15 – 11:45 | 📐 <b>Математический анализ</b> (Лекция)",
+            "🕒 12:00 – 13:30 | 📐 <b>Математический анализ</b> (Семинар)",
+        ],
+        2: [
+            "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Лекция)",
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык</b> (Семинар)",
+        ],
+        3: [
+            "🕒 10:15 – 11:45 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Лекция)",
+            "🕒 12:00 – 13:30 | 💻 <b>Информатика и цифровые технологии</b> (Семинар)",
+        ],
+        4: [
+            "🕒 10:15 – 11:45 | 🏃 <b>Физическая культура и спорт</b> (Семинар)",
+        ],
+        5: [],
+        6: [],
+    },
+    "overrides": {}
+}
 
-SCHEDULE_URL = "https://lk.gubkin.ru/schedule/"
+# =====================================================================
+# 2. РАСПИСАНИЕ ГРУППЫ ББ-25-02
+# =====================================================================
+SCHEDULE_BB_25_02 = {
+    # Верхняя неделя
+    "upper": {
+        0: [  # Понедельник
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+        ],
+        1: [  # Вторник
+            "🕒 10:15 – 11:45 | 📈 <b>Экономика организаций энергетического комплекса</b> (Лекция)\n👨‍🏫 Попадько Н.В. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📈 <b>Экономика организаций энергетического комплекса</b> (Семинар)\n👨‍🏫 Митряйкина ... | 🚪 Ауд. 1812",
+            "🕒 14:00 – 15:30 | 📊 <b>Модели национальных инновационных систем</b> (Семинар)\n👨‍🏫 Бодрова Е.В. | 🚪 Ауд. 1603",
+        ],
+        2: [  # Среда
+            "🕒 14:00 – 17:15 | 🔤 <b>Иностранный язык (русский) 3</b> (Семинар)\n👨‍🏫 Дикова Т.Ю. | 🚪 Ауд. 2938",
+        ],
+        3: [  # Четверг
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Р... | 🚪 Ауд. уточняется",
+            "🕒 14:00 – 17:15 | 📐 <b>Математические методы и модели в экономике</b> (Семинар)\n👨‍🏫 Матиив В.М. | 🚪 Ауд. 1603",
+        ],
+        4: [  # Пятница
+            "🕒 08:30 – 10:00 | 🛢️ <b>Переработка нефти и газа, производство товарных нефтегазопродуктов</b> (Лаб)\n👨‍🏫 С... | 🚪 Ауд. 7 ЛР",
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Семинар)\n👨‍🏫 Гринченко Н.... | 🚪 Ауд. 1816",
+            "🕒 12:00 – 13:30 | 💻 <b>Блокчейн-технологии и смарт-контракты</b> (Семинар)\n👨‍🏫 Пшеничный ... | 🚪 Ауд. 5805",
+            "🕒 14:00 – 15:30 | 🛢️ <b>Переработка нефти и газа, производство товарных нефтегазопродуктов</b> (Лекция)\n👨‍🏫 Жагфаров Ф.Г. | 🚪 Ауд. 343",
+            "🕒 15:45 – 17:15 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Семинар)\n👨‍🏫 Гринченко Н.... | 🚪 Ауд. 181...",
+        ],
+        5: [],
+        6: [],
+    },
+    # Нижняя неделя
+    "lower": {
+        0: [  # Понедельник
+            "🕒 08:30 – 10:00 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Р... | 🚪 Ауд. уточняется",
+            "🕒 10:15 – 11:45 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Ш... | 🚪 Ауд. уточняется",
+            "🕒 14:00 – 15:30 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Ш... | 🚪 Ауд. уточняется",
+        ],
+        1: [  # Вторник
+            "🕒 10:15 – 11:45 | 📈 <b>Экономика организаций энергетического комплекса</b> (Лекция)\n👨‍🏫 Попадько Н.В. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📊 <b>Модели национальных инновационных систем</b> (Лекция)\n👨‍🏫 Бодрова Е.В. | 🚪 Ауд. 5815",
+            "🕒 14:00 – 15:30 | 📈 <b>Экономика организаций энергетического комплекса</b> (Семинар)\n👨‍🏫 Митряйкина ... | 🚪 Ауд. 1105",
+            "🕒 15:45 – 17:15 | 📊 <b>Модели национальных инновационных систем</b> (Семинар)\n👨‍🏫 Бодрова Е.В. | 🚪 Ауд. 1414",
+        ],
+        2: [  # Среда
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📐 <b>Математические методы и модели в экономике</b> (Лекция)\n👨‍🏫 Матиив В.М. | 🚪 Ауд. 1205",
+            "🕒 14:00 – 17:15 | 🔤 <b>Иностранный язык (русский) 3</b> (Семинар)\n👨‍🏫 Дикова Т.Ю. | 🚪 Ауд. 2938",
+        ],
+        3: [  # Четверг
+            "🕒 10:15 – 11:45 | 📊 <b>Управленческие решения в деятельности ОЭС</b> (Лекция)\n👨‍🏫 Масленнико... | 🚪 Ауд. 5805",
+            "🕒 12:00 – 13:30 | 📊 <b>Управленческие решения в деятельности ОЭС</b> (Семинар)\n👨‍🏫 Масленнико... | 🚪 Ауд. 5805",
+            "🕒 14:00 – 15:30 | 💻 <b>Блокчейн-технологии и смарт-контракты</b> (Лекция)\n👨‍🏫 Пшеничный ... | 🚪 Ауд. 1620",
+            "🕒 15:45 – 17:15 | 💻 <b>Блокчейн-технологии и смарт-контракты</b> (Семинар)\n👨‍🏫 Пшеничный ... | 🚪 Ауд. 1620",
+        ],
+        4: [  # Пятница
+            "🕒 10:15 – 11:45 | 🛢️ <b>Переработка нефти и газа, производство товарных нефтегазопродуктов</b> (Лаб)\n👨‍🏫 С... | 🚪 Ауд. 7 ЛР",
+            "🕒 12:00 – 13:30 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Семинар)\n👨‍🏫 Гринченко Н.... | 🚪 Ауд. 181...",
+            "🕒 14:00 – 15:30 | 📚 <b>Основы бизнес-администрирования</b> (Семинар)\n👨‍🏫 Гринченко Н.... | 🚪 Ауд. 181...",
+        ],
+        5: [],
+        6: [],
+    },
+    # Переносы по датам
+    "overrides": {
+        "2026-10-19": [
+            "🕒 08:30 – 10:00 | 📈 <b>Экономика организаций энергетического комплекса</b> (Семинар)\n🔄 <i>Перенесено с 06.10.2026</i>\n👨‍🏫 Митряйкина ... | 🚪 Ауд. 5805",
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 14:00 – 14:45 | 📌 <b>Кураторский час</b> (Мероприятие)\n👨‍🏫 Жучкова Т.А. | 🚪 Ауд. 1",
+        ],
+        "2026-10-21": [
+            "🕒 14:00 – 17:15 | 🔤 <b>Иностранный язык (русский) 3</b> (Семинар)\n👨‍🏫 Дикова Т.Ю. | 🚪 Ауд. 2938",
+            "🕒 18:05 – 18:50 | 📌 <b>Прием курсовых работ</b> (Мероприятие)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1",
+        ],
+        "2026-10-23": [
+            "🕒 08:30 – 10:00 | 🛢️ <b>Переработка нефти и газа, производство товарных нефтегазопродуктов</b> (Лаб)\n👨‍🏫 С... | 🚪 Ауд. 7 ЛР",
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Семинар)\n👨‍🏫 Гринченко Н.... | 🚪 Ауд. 1816",
+            "🕒 12:00 – 13:30 | 💻 <b>Блокчейн-технологии и смарт-контракты</b> (Семинар)\n👨‍🏫 Пшеничный ... | 🚪 Ауд. 5805",
+            "🕒 14:00 – 15:30 | ❌ <b>Переработка нефти и газа... (Лекция) — ПЕРЕНЕСЕНО НА 28.10.2026</b>",
+            "🕒 15:45 – 17:15 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Семинар)\n👨‍🏫 Гринченко Н.... | 🚪 Ауд. 181...",
+        ],
+        "2026-10-28": [
+            "🕒 08:30 – 10:00 | 🛢️ <b>Переработка нефти и газа, производство товарных нефтегазопродуктов</b> (Лекция)\n🔄 <i>Перенесено с 23.10.2026</i>\n👨‍🏫 Жагфаров Ф.Г. | 🚪 Ауд. Боль...",
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📐 <b>Математические методы и модели в экономике</b> (Лекция)\n👨‍🏫 Матиив В.М. | 🚪 Ауд. 1205",
+            "🕒 14:00 – 17:15 | 🔤 <b>Иностранный язык (русский) 3</b> (Семинар)\n👨‍🏫 Дикова Т.Ю. | 🚪 Ауд. 2938",
+        ],
+        "2026-11-04": [],
+        "2026-11-16": [
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 14:00 – 14:45 | 📌 <b>Кураторский час</b> (Мероприятие)\n👨‍🏫 Жучкова Т.А. | 🚪 Ауд. 1",
+        ],
+        "2026-11-19": [
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Р... | 🚪 Ауд. уточняется",
+            "🕒 14:00 – 17:15 | 📐 <b>Математические методы и модели в экономике</b> (Семинар)\n👨‍🏫 Матиив В.М. | 🚪 Ауд. 1603",
+            "🕒 17:20 – 18:50 | 📐 <b>Математические методы и модели в экономике</b> (Семинар)\n👨‍🏫 Матиив В.М. | 🚪 Ауд. 1603",
+        ],
+        "2026-12-14": [
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 14:00 – 14:45 | 📌 <b>Кураторский час</b> (Мероприятие)\n👨‍🏫 Жучкова Т.А. | 🚪 Ауд. 1",
+        ],
+        "2026-12-21": [
+            "🕒 08:30 – 10:00 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Р... | 🚪 Ауд. уточняется",
+            "🕒 08:30 – 10:00 | 🛢️ <b>Переработка нефти и газа, производство товарных нефтегазопродуктов</b> (Лаб)\n👨‍🏫 С... | 🚪 Ауд. 7 ЛР",
+            "🕒 10:15 – 11:45 | 📚 <b>Ключевые концепции и инструменты современного менеджмента</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Ш... | 🚪 Ауд. уточняется",
+            "🕒 14:00 – 15:30 | 🔤 <b>Иностранный язык (английский) 3</b> (Семинар)\n👨‍🏫 Ш... | 🚪 Ауд. уточняется",
+        ],
+        "2026-12-23": [
+            "🕒 10:15 – 11:45 | 📚 <b>Основы бизнес-администрирования</b> (Лекция)\n👨‍🏫 Еремина И.Ю. | 🚪 Ауд. 5815",
+            "🕒 14:00 – 17:15 | 🔤 <b>Иностранный язык (русский) 3</b> (Семинар)\n👨‍🏫 Дикова Т.Ю. | 🚪 Ауд. 2938",
+        ],
+        "2026-12-24": [
+            "🕒 12:00 – 13:30 | 📊 <b>Управленческие решения в деятельности ОЭС</b> (Семинар)\n👨‍🏫 Масленнико... | 🚪 Ауд. 5805",
+            "🕒 15:45 – 17:15 | 💻 <b>Блокчейн-технологии и смарт-контракты</b> (Семинар)\n👨‍🏫 Пшеничный ... | 🚪 Ауд. 1620",
+        ],
+    }
+}
 
-WARNING_TEXT = (
-    "⚠️ <b>Важное уведомление:</b>\n"
-    "Расписание в боте составлено по данным от <b>15 октября 2026 г.</b> "
-    "В течение семестра данные могут меняться, поэтому на всякий случай "
-    "проверяйте актуальное расписание на официальном сайте:\n"
-    "🔗 https://lk.gubkin.ru/schedule/"
-)
+ALL_SCHEDULES = {
+    "БС-26-05": SCHEDULE_BS_26_05,
+    "ББ-25-02": SCHEDULE_BB_25_02,
+}
 
-def get_site_inline_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌐 Официальный сайт: lk.gubkin.ru/schedule", url=SCHEDULE_URL)]
-    ])
 
-def get_main_keyboard():
+# =====================================================================
+# КЛАВИАТУРЫ И ФУНКЦИИ ФОРМАТИРОВАНИЯ
+# =====================================================================
+def get_group_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎓 БС-26-05", callback_data="set_group:БС-26-05"),
+                InlineKeyboardButton(text="🎓 ББ-25-02", callback_data="set_group:ББ-25-02"),
+            ]
+        ]
+    )
+
+
+def get_main_reply_kb(group_name: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📆 Завтра")],
-            [KeyboardButton(text="📋 Эта неделя"), KeyboardButton(text="⏭️ След. неделя")],
-            [KeyboardButton(text="🔄 Обновить"), KeyboardButton(text="🌐 Официальный сайт")],
-            [KeyboardButton(text="❓ Помощь"), KeyboardButton(text="💬 Обратная связь")]
+            [KeyboardButton(text="🗓 На эту неделю"), KeyboardButton(text="⏭ На след. неделю")],
+            [KeyboardButton(text=f"🔄 Сменить группу (сейчас: {group_name})")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
-# Шаблон ВЕРХНЕЙ недели (недели 7, 9, 11, 13, 15, 17)
-UPPER_STANDARD = {
-    0: [  # Понедельник
-        "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Семинар)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1603",
-        "🕒 12:00 – 13:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1603",
-        "🕒 14:00 – 15:30 | 🛢️ <b>Углеводородная парадигма современности</b> (Лекция)\n👨‍🏫 Алексанян К.Г. | 🚪 Ауд. 725"
-    ],
-    1: [  # Вторник
-        "🕒 10:15 – 13:30 | 💻 <b>Цифровые технологии в международном бизнесе</b> (Семинар)\n👨‍🏫 Бойко Д.С. | 🚪 Ауд. 511",
-        "🕒 14:00 – 15:30 | 📚 <b>История России</b> (Семинар)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1501Б"
-    ],
-    2: [  # Среда
-        "🕒 15:45 – 17:15 | 📊 <b>Бизнес-аналитика и инновационные технологии</b> (Лекция)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1206",
-        "🕒 17:20 – 18:50 | 📊 <b>Бизнес-аналитика и инновационные технологии</b> (Семинар)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1621"
-    ],
-    3: [  # Четверг
-        "🕒 10:15 – 11:45 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 1 гр: Жарова Е.Е. | 🚪 Ауд. 2414",
-        "🕒 12:00 – 13:30 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 1 гр: Жарова Е.Е. | 🚪 Ауд. 2414",
-        "🕒 14:00 – 15:30 | 📐 <b>Математические методы экономического анализа</b> (Семинар)\n👨‍🏫 Бойко Д.С. | 🚪 Ауд. 1603",
-        "🕒 15:45 – 17:15 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Лекция)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1104"
-    ],
-    4: [  # Пятница
-        "🕒 10:15 – 11:45 | 🌐 <b>Кросс-культурные коммуникации: традиции и перспективы</b> (Лекция)\n👨‍🏫 Фальковская К.И. | 🚪 Ауд. 1603",
-        "🕒 12:00 – 13:30 | 🌐 <b>Кросс-культурные коммуникации: традиции и перспективы</b> (Семинар)\n👨‍🏫 Фальковская К.И. | 🚪 Ауд. 1603",
-        "🕒 14:00 – 15:30 | 📐 <b>Математические методы экономического анализа</b> (Лекция)\n👨‍🏫 Сулян Г.С. | 🚪 Ауд. 711"
-    ],
-    5: [],
-    6: []
-}
 
-# Шаблон НИЖНЕЙ недели (недели 8, 10, 12, 14, 16, 18)
-LOWER_STANDARD = {
-    0: [  # Понедельник
-        "🕒 12:00 – 13:30 | 🛢️ <b>Углеводородная парадигма современности</b> (Лабораторная)\n👥 2 гр: Бронзова И.А. | 🚪 Ауд. 823",
-        "🕒 14:00 – 15:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1815",
-        "🕒 15:45 – 17:15 | 📚 <b>История России</b> (Лекция)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1104"
-    ],
-    1: [  # Вторник
-        "🕒 10:15 – 13:30 | 💻 <b>Цифровые технологии в международном бизнесе</b> (Семинар)\n👨‍🏫 Бойко Д.С. | 🚪 Ауд. 512",
-        "🕒 14:00 – 15:30 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 1 гр: Жарова Е.Е. (ауд. 2414) / 2 гр: Савченко Е.В. (ауд. 2417)",
-        "🕒 15:45 – 17:15 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 2 гр: Савченко Е.В. | 🚪 Ауд. 2417"
-    ],
-    2: [  # Среда
-        "🕒 12:00 – 13:30 | 📊 <b>Бизнес-аналитика и инновационные технологии</b> (Семинар)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1501А",
-        "🕒 14:00 – 15:30 | 📊 <b>Бизнес-аналитика и инновационные технологии</b> (Лекция)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1104",
-        "🕒 15:45 – 17:15 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 2 гр: Савченко Е.В. | 🚪 Ауд. 2417"
-    ],
-    3: [  # Четверг
-        "🕒 10:15 – 11:45 | 🛢️ <b>Углеводородная парадигма современности</b> (Лабораторная)\n👥 1 гр: Илькова А.А. | 🚪 Ауд. 823",
-        "🕒 14:00 – 15:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Лекция)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 725",
-        "🕒 15:45 – 17:15 | 📐 <b>Математические методы экономического анализа</b> (Семинар)\n👨‍🏫 Бойко Д.С. | 🚪 Ауд. 1804Б"
-    ],
-    4: [  # Пятница
-        "🕒 12:00 – 13:30 | 🛢️ <b>Углеводородная парадигма современности</b> (Лекция)\n👨‍🏫 Алексанян К.Г. | 🚪 Ауд. 725",
-        "🕒 14:00 – 15:30 | 📐 <b>Математические методы экономического анализа</b> (Лекция)\n👨‍🏫 Сулян Г.С. | 🚪 Ауд. 725"
-    ],
-    5: [],
-    6: []
-}
+def get_day_schedule_text(group_name: str, target_date: datetime.date) -> str:
+    sched = ALL_SCHEDULES.get(group_name)
+    if not sched:
+        return "❌ Группа не найдена."
 
-# Все точечные переносы, праздники и исключения
-DATE_OVERRIDES = {
-    date(2026, 11, 4): [],  # Выходной
-    date(2026, 11, 7): [    # Суббота — перенос с 09.11
-        "🕒 10:15 – 11:45 | 🛢️ <b>Углеводородная парадигма современности</b> (Лекция — <i>Перенесено с 09.11.2026</i>)\n👨‍🏫 Алексанян К.Г. | 🚪 Ауд. 725"
-    ],
-    date(2026, 11, 9): [    # Понедельник
-        "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Семинар)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1603",
-        "🕒 12:00 – 13:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1603",
-        "🕒 15:45 – 17:15 | 🛢️ <b>Углеводородная парадигма современности</b> (Лабораторная)\n👥 2 гр: Бронзова И.А. | 🚪 Ауд. 823"
-    ],
-    date(2026, 11, 16): [   # Понедельник — 2 лабы подряд
-        "🕒 10:15 – 11:45 | 🛢️ <b>Углеводородная парадигма современности</b> (Лабораторная)\n👥 2 гр: Бронзова И.А. | 🚪 Ауд. 823",
-        "🕒 12:00 – 13:30 | 🛢️ <b>Углеводородная парадигма современности</b> (Лабораторная)\n👥 2 гр: Бронзова И.А. | 🚪 Ауд. 823",
-        "🕒 14:00 – 15:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1815",
-        "🕒 15:45 – 17:15 | 📚 <b>История России</b> (Лекция)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1104"
-    ],
-    date(2026, 11, 18): [   # Среда — доп. семинар по истории
-        "🕒 10:15 – 11:45 | 📚 <b>История России</b> (Семинар)\n👨‍🏫 Охапкина Н.К. | 🚪 Ауд. 1605",
-        "🕒 12:00 – 13:30 | 📊 <b>Бизнес-аналитика и инновационные технологии</b> (Семинар)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1501А",
-        "🕒 14:00 – 15:30 | 📊 <b>Бизнес-аналитика и инновационные технологии</b> (Лекция)\n👨‍🏫 Голованова А.Е. | 🚪 Ауд. 1104",
-        "🕒 15:45 – 17:15 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 2 гр: Савченко Е.В. | 🚪 Ауд. 2417"
-    ],
-    date(2026, 11, 21): [   # Суббота
-        "🕒 10:15 – 13:30 | 💻 <b>Цифровые технологии в международном бизнесе</b> (Семинар)\n👨‍🏫 Бойко Д.С. | 🚪 Ауд. 512"
-    ],
-    date(2026, 11, 28): [   # Суббота — англ у 2 гр
-        "🕒 08:30 – 11:45 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 2 гр: Савченко Е.В. | 🚪 Ауд. 2417"
-    ],
-    date(2026, 12, 24): [   # Четверг
-        "🕒 10:15 – 11:45 | 🔤 <b>Иностранный язык (английский)</b> (Семинар)\n👥 1 гр: Жарова Е.Е. | 🚪 Ауд. 2414",
-        "🕒 14:00 – 15:30 | 📐 <b>Математические методы экономического анализа</b> (Семинар)\n👨‍🏫 Бойко Д.С. | 🚪 Ауд. 1603"
-    ],
-    date(2026, 12, 25): [   # Пятница
-        "🕒 10:15 – 11:45 | 🌐 <b>Кросс-культурные коммуникации: традиции и перспективы</b> (Семинар — <i>Перенесено с 04.09.2026</i>)\n👨‍🏫 Фальковская К.И. | 🚪 Ауд. 1603",
-        "🕒 12:00 – 13:30 | 🌐 <b>Кросс-культурные коммуникации: традиции и перспективы</b> (Семинар)\n👨‍🏫 Фальковская К.И. | 🚪 Ауд. 1603",
-        "🕒 14:00 – 15:30 | 📐 <b>Математические методы экономического анализа</b> (Лекция)\n👨‍🏫 Сулян Г.С. | 🚪 Ауд. 711"
-    ],
-    date(2026, 12, 28): [
-        "🕒 14:00 – 15:30 | 📈 <b>Микроэкономика и основы экономических знаний</b> (Семинар)\n👨‍🏫 Морозов В.В. | 🚪 Ауд. 1815"
-    ],
-    date(2026, 12, 29): [],
-    date(2026, 12, 30): [],
-    date(2026, 12, 31): [],
-    date(2027, 1, 1): [],
-    date(2027, 1, 2): [],
-    date(2027, 1, 3): []
-}
+    date_str = target_date.strftime("%Y-%m-%d")
+    date_formatted = target_date.strftime("%d.%m.%Y")
+    weekday = target_date.weekday()
+    day_name = DAYS_RU[weekday]
 
-BASE_MONDAY = date(2026, 10, 12)
+    iso_week = target_date.isocalendar()[1]
+    week_type = "upper" if iso_week % 2 == 1 else "lower"
+    week_label = "Верхняя" if week_type == "upper" else "Нижняя"
 
-def get_study_week_num(target_date: date) -> int:
-    days_diff = (target_date - BASE_MONDAY).days
-    return 7 + (days_diff // 7)
+    header = f"🎓 <b>Группа: {group_name}</b>\n📅 <b>{day_name}, {date_formatted}</b> <i>({week_label} неделя)</i>\n\n"
 
-def get_week_type(target_date: date) -> str:
-    study_week = get_study_week_num(target_date)
-    return "верхняя" if study_week % 2 == 1 else "нижняя"
-
-def get_schedule_for_date(target_date: datetime):
-    d = target_date.date()
-    if d < date(2026, 10, 12) or d > date(2027, 1, 3):
-        return []
-    if d in DATE_OVERRIDES:
-        return DATE_OVERRIDES[d]
-    weekday = d.weekday()
-    if get_week_type(d) == "верхняя":
-        return UPPER_STANDARD.get(weekday, [])
+    if date_str in sched["overrides"]:
+        lessons = sched["overrides"][date_str]
     else:
-        return LOWER_STANDARD.get(weekday, [])
+        lessons = sched[week_type].get(weekday, [])
 
-DAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    if not lessons:
+        return header + "🎉 <b>Пар нет! Можно отдыхать.</b>"
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 БС-26-05", callback_data="group_bs_26_05")],
-        [InlineKeyboardButton(text="🌐 Официальный сайт (lk.gubkin.ru)", url=SCHEDULE_URL)]
-    ])
-    await message.answer(
-        f"👋 Привет, <b>{message.from_user.first_name}</b>!\n\n"
-        "Я бот-помощник с расписанием занятий.\n\n"
-        f"{WARNING_TEXT}\n\n"
-        "Пожалуйста, выбери свою группу для начала работы:",
-        reply_markup=keyboard,
-        parse_mode="HTML",
-        disable_web_page_preview=True
+    body = PAIR_SEPARATOR.join(lessons)
+    return header + body
+
+
+def get_week_schedule_text(group_name: str, start_of_week: datetime.date) -> str:
+    sched = ALL_SCHEDULES.get(group_name)
+    iso_week = start_of_week.isocalendar()[1]
+    week_type = "upper" if iso_week % 2 == 1 else "lower"
+    week_label = "Верхняя" if week_type == "upper" else "Нижняя"
+    end_of_week = start_of_week + timedelta(days=5)
+
+    text = (
+        f"🎓 <b>Расписание группы {group_name}</b>\n"
+        f"🗓 <b>Неделя: {start_of_week.strftime('%d.%m')} – {end_of_week.strftime('%d.%m.%Y')}</b> ({week_label})\n"
+        f"═════════════════════════\n\n"
     )
-    await state.set_state(UserState.waiting_for_group)
 
-@dp.callback_query(F.data == "group_bs_26_05")
-async def process_group_choice(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(group="БС-26-05")
-    await state.set_state(UserState.main_menu)
+    for day_offset in range(6):
+        current_date = start_of_week + timedelta(days=day_offset)
+        date_str = current_date.strftime("%Y-%m-%d")
+        weekday = current_date.weekday()
+        day_name = DAYS_RU[weekday]
+
+        if date_str in sched["overrides"]:
+            lessons = sched["overrides"][date_str]
+        else:
+            lessons = sched[week_type].get(weekday, [])
+
+        text += f"📌 <b>{day_name.upper()} ({current_date.strftime('%d.%m')})</b>\n"
+        if not lessons:
+            text += "🎉 Пар нет\n"
+        else:
+            text += PAIR_SEPARATOR.join(lessons) + "\n"
+
+        text += "\n═════════════════════════\n\n"
+
+    return text
+
+
+# =====================================================================
+# ОБРАБОТЧИКИ
+# =====================================================================
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    await message.answer(
+        "👋 <b>Привет! Я бот с расписанием РГУ нефти и газа (НИУ) имени И.М. Губкина.</b>\n\n"
+        "Пожалуйста, выбери свою учебную группу:",
+        reply_markup=get_group_inline_kb(),
+    )
+
+
+@dp.message(Command("group"))
+@dp.message(F.text.startswith("🔄 Сменить группу"))
+async def change_group(message: Message):
+    await message.answer(
+        "👇 Выбери нужную учебную группу из списка:",
+        reply_markup=get_group_inline_kb(),
+    )
+
+
+@dp.callback_query(F.data.startswith("set_group:"))
+async def select_group_callback(callback: CallbackQuery):
+    group_name = callback.data.split(":")[1]
+    user_groups[callback.from_user.id] = group_name
+
+    await callback.message.edit_text(
+        f"✅ Отлично! Ты выбрал группу <b>{group_name}</b>.\n"
+        f"Используй кнопки внизу экрана для просмотра расписания."
+    )
     await callback.message.answer(
-        "✅ Группа <b>БС-26-05</b> успешно выбрана!\n\n"
-        f"{WARNING_TEXT}\n\n"
-        "Используй кнопки меню ниже для просмотра расписания:",
-        reply_markup=get_main_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
+        f"Меню для группы <b>{group_name}</b> активировано:",
+        reply_markup=get_main_reply_kb(group_name),
     )
     await callback.answer()
 
+
+async def ensure_group_selected(message: Message) -> str | None:
+    group_name = user_groups.get(message.from_user.id)
+    if not group_name:
+        await message.answer(
+            "⚠️ Сначала выбери свою группу:",
+            reply_markup=get_group_inline_kb(),
+        )
+        return None
+    return group_name
+
+
 @dp.message(F.text == "📅 Сегодня")
-async def cmd_today(message: types.Message):
-    now = get_moscow_now()
-    d = now.date()
-    day_name = DAYS_RU[d.weekday()]
-    w_type = get_week_type(d)
-    w_num = get_study_week_num(d)
-    lessons = get_schedule_for_date(now)
-    
-    response = (
-        f"📅 <b>Расписание на сегодня ({d.strftime('%d.%m.%Y')})</b>\n"
-        f"📌 {day_name} | {w_num} неделя ({w_type})\n\n"
-    )
-    if lessons:
-        response += "\n\n".join(lessons)
-    else:
-        response += "🎉 Пар на сегодня нет! Можно отдохнуть или закрыть долги. ☕"
-        
-    response += "\n\n🔗 Официальный сайт: https://lk.gubkin.ru/schedule/"
-    await message.answer(
-        response,
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+async def show_today(message: Message):
+    group_name = await ensure_group_selected(message)
+    if not group_name:
+        return
+    today = datetime.now(MSK_TZ).date()
+    await message.answer(get_day_schedule_text(group_name, today))
+
 
 @dp.message(F.text == "📆 Завтра")
-async def cmd_tomorrow(message: types.Message):
-    tomorrow = get_moscow_now() + timedelta(days=1)
-    d = tomorrow.date()
-    day_name = DAYS_RU[d.weekday()]
-    w_type = get_week_type(d)
-    w_num = get_study_week_num(d)
-    lessons = get_schedule_for_date(tomorrow)
-    
-    response = (
-        f"📆 <b>Расписание на завтра ({d.strftime('%d.%m.%Y')})</b>\n"
-        f"📌 {day_name} | {w_num} неделя ({w_type})\n\n"
-    )
-    if lessons:
-        response += "\n\n".join(lessons)
-    else:
-        response += "🎉 Пар на завтра нет! Отличный день для отдыха. ☕"
-        
-    response += "\n\n🔗 Официальный сайт: https://lk.gubkin.ru/schedule/"
-    await message.answer(
-        response,
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+async def show_tomorrow(message: Message):
+    group_name = await ensure_group_selected(message)
+    if not group_name:
+        return
+    tomorrow = datetime.now(MSK_TZ).date() + timedelta(days=1)
+    await message.answer(get_day_schedule_text(group_name, tomorrow))
 
-@dp.message(F.text == "🔄 Обновить")
-async def cmd_refresh(message: types.Message):
-    now = get_moscow_now()
-    d = now.date()
-    day_name = DAYS_RU[d.weekday()]
-    w_type = get_week_type(d)
-    w_num = get_study_week_num(d)
-    lessons = get_schedule_for_date(now)
-    
-    response = (
-        f"🔄 <b>Данные обновлены! ({d.strftime('%d.%m.%Y')})</b>\n"
-        f"📌 {day_name} | {w_num} неделя ({w_type})\n\n"
-    )
-    if lessons:
-        response += "\n\n".join(lessons)
-    else:
-        response += "🎉 Пар на сегодня нет! ☕"
-        
-    response += "\n\n🔗 Официальный сайт: https://lk.gubkin.ru/schedule/"
-    await message.answer(
-        response,
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
 
-async def send_week_schedule(message: types.Message, ref_date: datetime, title: str):
-    start_of_week = ref_date - timedelta(days=ref_date.weekday())
-    w_type = get_week_type(start_of_week.date())
-    w_num = get_study_week_num(start_of_week.date())
-    end_of_week = start_of_week + timedelta(days=6)
-    
-    response = (
-        f"{title} <b>({start_of_week.strftime('%d.%m')} – {end_of_week.strftime('%d.%m.%Y')})</b>\n"
-        f"📌 <b>{w_num} неделя, {w_type.upper()}</b>\n\n"
-        "─────────────────────────\n\n"
-    )
-    
-    days_blocks = []
-    for i in range(6):
-        day_dt = start_of_week + timedelta(days=i)
-        day_name = DAYS_RU[i]
-        lessons = get_schedule_for_date(day_dt)
-        
-        if i == 5 and not lessons:
-            continue
-            
-        day_text = f"🔹 <b>{day_name} ({day_dt.strftime('%d.%m')}):</b>\n"
-        if lessons:
-            day_text += "\n".join(lessons)
-        else:
-            day_text += "Пар нет 🎉"
-            
-        days_blocks.append(day_text)
-    
-    response += "\n\n─────────────────────────\n\n".join(days_blocks)
-    response += "\n\n─────────────────────────\n\n"
-    response += "🔗 Официальный сайт: https://lk.gubkin.ru/schedule/"
-    
-    await message.answer(
-        response,
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+@dp.message(F.text == "🗓 На эту неделю")
+async def show_this_week(message: Message):
+    group_name = await ensure_group_selected(message)
+    if not group_name:
+        return
+    today = datetime.now(MSK_TZ).date()
+    start_of_week = today - timedelta(days=today.weekday())
+    await message.answer(get_week_schedule_text(group_name, start_of_week))
 
-@dp.message(F.text == "📋 Эта неделя")
-async def cmd_this_week(message: types.Message):
-    await send_week_schedule(message, get_moscow_now(), "📋 <b>Расписание на эту неделю</b>")
 
-@dp.message(F.text == "⏭️ След. неделя")
-async def cmd_next_week(message: types.Message):
-    await send_week_schedule(message, get_moscow_now() + timedelta(weeks=1), "⏭️ <b>Расписание на следующую неделю</b>")
+@dp.message(F.text == "⏭ На след. неделю")
+async def show_next_week(message: Message):
+    group_name = await ensure_group_selected(message)
+    if not group_name:
+        return
+    today = datetime.now(MSK_TZ).date()
+    start_of_next_week = today - timedelta(days=today.weekday()) + timedelta(days=7)
+    await message.answer(get_week_schedule_text(group_name, start_of_next_week))
 
-@dp.message(F.text == "🌐 Официальный сайт")
-async def cmd_official_site(message: types.Message):
-    await message.answer(
-        "🌐 <b>Официальное расписание Губкинского университета:</b>\n"
-        "🔗 https://lk.gubkin.ru/schedule/\n\n"
-        f"{WARNING_TEXT}",
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
 
-@dp.message(F.text == "❓ Помощь")
-async def cmd_help(message: types.Message):
-    await message.answer(
-        "❓ <b>Инструкция по использованию бота:</b>\n\n"
-        "• Нажимайте на кнопки главного меню, чтобы узнать расписание на нужный день или неделю.\n"
-        "• Кнопка <b>🔄 Обновить</b> загружает актуальные данные на текущий момент.\n"
-        "• Бот учитывает все даты, номера учебных недель, переносы и подгруппы вплоть до конца декабря.\n"
-        "• По всем вопросам и ошибкам обращайтесь в раздел «Обратная связь».\n\n"
-        f"{WARNING_TEXT}",
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
-
-@dp.message(F.text == "💬 Обратная связь")
-async def cmd_feedback(message: types.Message):
-    await message.answer(
-        "💬 <b>Обратная связь</b>\n\n"
-        "Нашли ошибку в расписании или есть идея, как улучшить бота?\n"
-        "Напишите разработчику: <b>@bbtbnzg</b>\n\n"
-        "🔗 Официальное расписание: https://lk.gubkin.ru/schedule/",
-        reply_markup=get_site_inline_keyboard(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
-
-# --- Фоновый веб-сервер против засыпания на Render ---
+# =====================================================================
+# ВЕБ-СЕРВЕР ДЛЯ RENDER (KEEP-ALIVE 24/7)
+# =====================================================================
 async def handle_ping(request):
     return web.Response(text="Bot is running 24/7!")
+
 
 async def start_web_server():
     app = web.Application()
@@ -392,11 +415,15 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    logging.info(f"Web server started on port {port}")
+
 
 async def main():
+    logging.basicConfig(level=logging.INFO)
     await start_web_server()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
